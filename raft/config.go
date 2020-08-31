@@ -1,4 +1,4 @@
-package alg
+package raft
 
 import (
 	crand "crypto/rand"
