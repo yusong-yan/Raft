@@ -71,7 +71,7 @@ func Make_config(n int, unreliable bool) *config {
 
 	cfg.setunreliable(unreliable)
 
-	cfg.net.LongDelays(true)
+	cfg.net.LongDelays(false)
 
 	for i := 0; i < cfg.n; i++ {
 		cfg.logs[i] = map[int]interface{}{}

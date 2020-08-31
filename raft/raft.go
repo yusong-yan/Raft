@@ -221,7 +221,9 @@ func (rf *Raft) startAsLeader() {
 }
 
 func (rf *Raft) sendHeartBeat() {
+	//a := time.Now()
 	args := AppendEntriesArgs{}
+	numLost := len(rf.peers) - 1
 	rf.mu.Lock()
 	if !rf.isLeader {
 		rf.mu.Unlock()
@@ -238,13 +240,14 @@ func (rf *Raft) sendHeartBeat() {
 		}
 		server := s
 		reply := AppendEntriesReply{}
-		go func(server int, args AppendEntriesArgs, reply AppendEntriesReply) {
+		go func() {
 			ok := rf.sendAppendEntries(server, &args, &reply)
 			if !ok {
 				outDate <- false
 				return
 			}
 			rf.mu.Lock()
+			numLost--
 			if reply.Term > rf.Term {
 				rf.Term = reply.Term
 				rf.mu.Unlock()
@@ -253,15 +256,20 @@ func (rf *Raft) sendHeartBeat() {
 			}
 			rf.mu.Unlock()
 			outDate <- false
-		}(server, args, reply)
+		}()
 	}
 
 	for i := 0; i < len(rf.peers)-1; i++ {
 		a := <-outDate
 		if a {
 			rf.becomeFollwerFromLeader <- true
+			return
 		}
 	}
+	if numLost == len(rf.peers)-1 {
+		rf.becomeFollwerFromLeader <- true
+	}
+	//println(time.Since(a), "  ", time.Duration(generateTime())*time.Millisecond)
 }
 
 func (rf *Raft) startAsCand() bool {
@@ -282,7 +290,7 @@ func (rf *Raft) startAsCand() bool {
 		server := s
 		done.Add(1)
 		reply := RequestVoteReply{}
-		go func(server int, args RequestVoteArgs, reply RequestVoteReply) {
+		go func() {
 			defer done.Done()
 			ok := rf.sendRequestVote(server, &args, &reply)
 			if !ok {
@@ -301,14 +309,14 @@ func (rf *Raft) startAsCand() bool {
 				votes++
 			}
 			rf.mu.Unlock()
-		}(server, args, reply)
+		}()
 	}
 	done.Wait()
 	if getReply == 1 {
 		rf.mu.Lock()
 		rf.Term--
-		rf.becomeFollwerFromCand <- true
 		rf.mu.Unlock()
+		rf.becomeFollwerFromCand <- true
 		return false
 	}
 	if votes > getReply/2 && votes > 1 {
@@ -316,6 +324,7 @@ func (rf *Raft) startAsCand() bool {
 	} else {
 		return false
 	}
+	//println(time.Since(a), "  ", time.Duration(generateTime())*time.Millisecond)
 }
 
 func (rf *Raft) setLeader(bo bool) {
