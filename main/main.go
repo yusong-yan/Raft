@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"../alg"
+	"../raft"
 )
 
 func printMenu() {
@@ -35,7 +35,7 @@ func main() {
 			fmt.Println("\nInvalid Server Number")
 			continue
 		}
-		cfg := alg.Make_config(numServer, false)
+		cfg := raft.Make_config(numServer, false)
 		for {
 			printMenu()
 			var command string
