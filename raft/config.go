@@ -71,7 +71,7 @@ func Make_config(n int, unreliable bool) *config {
 
 	cfg.setunreliable(unreliable)
 
-	cfg.net.LongDelays(false)
+	cfg.net.LongDelays(true)
 
 	for i := 0; i < cfg.n; i++ {
 		cfg.logs[i] = map[int]interface{}{}
@@ -225,6 +225,27 @@ func (cfg *config) Disconnect(i int) {
 	}
 }
 
+func (cfg *config) One(cmd interface{}) {
+	//t0 := time.Now()
+	starts := 0
+	// try all the servers, maybe one is the leader.
+	for si := 0; si < cfg.n; si++ {
+		starts = (starts + 1) % cfg.n
+		var rf *Raft
+		cfg.mu.Lock()
+		if cfg.connected[starts] {
+			rf = cfg.rafts[starts]
+		}
+		cfg.mu.Unlock()
+		if rf != nil {
+			_, _, ok := rf.Start(cmd)
+			if ok {
+				break
+			}
+		}
+	}
+}
+
 func (cfg *config) rpcCount(server int) int {
 	return cfg.net.GetCount(server)
 }
@@ -261,7 +282,17 @@ func (cfg *config) PrintAllInformation() {
 		if cfg.connected[i] {
 			Term, State := cfg.rafts[i].GetState2()
 			println("Raft", i, " in term", Term, " as ", State)
+			// print("      log: ")
+			// cfg.printLog(cfg.rafts[i])
+			// println()
+
 		}
 	}
 	println("============================")
 }
+
+// func (cfg *config) printLog(raft *Raft) {
+// 	for i := 0; i < len(raft.log); i++ {
+// 		fmt.Print(raft.log[i].Command, " ")
+// 	}
+// }

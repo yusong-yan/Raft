@@ -12,6 +12,7 @@ func printMenu() {
 	println("b. Connect a servers")
 	println("c. Disconnect a servers")
 	println("d. Store K/V")
+	println("e. emit a command")
 	println("m. Back to the main menu ")
 	println("q. Quit")
 	print("ENTER: ")
@@ -23,7 +24,7 @@ func main() {
 		fmt.Println("\n================================================")
 		fmt.Println("WELCOME to raft simulation!   (press q to leave)")
 		fmt.Println("================================================")
-		fmt.Print("\nPlease select number of server (between 2 - 9) :")
+		fmt.Print("\nPlease select number of server:")
 		var ns string
 		fmt.Scanln(&ns)
 		if ns == "q" {
@@ -31,8 +32,8 @@ func main() {
 			break
 		}
 		numServer, _ := strconv.Atoi(ns)
-		if numServer < 2 || numServer > 9 {
-			fmt.Println("\nInvalid Server Number")
+		if numServer < 2 || numServer > 12 {
+			fmt.Println("\nInvalid Server Number (please select between 2 - 12)")
 			continue
 		}
 		cfg := raft.Make_config(numServer, false)
@@ -71,6 +72,14 @@ func main() {
 			} else if command == "d" {
 				println("Currently not supportted")
 				continue
+			} else if command == "e" {
+				println("\nWrite down a command or a number")
+				var sn string
+				fmt.Scanln(&sn)
+				if sn == "q" {
+					return
+				}
+				cfg.One(sn)
 			} else if command == "m" {
 				cfg.Cleanup()
 				break

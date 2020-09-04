@@ -274,7 +274,7 @@ func (rf *Raft) sendHeartBeat() {
 
 func (rf *Raft) startAsCand() bool {
 	votes := 1
-	var done sync.WaitGroup
+	cond := sync.NewCond(&rf.mu)
 	getReply := 1
 	args := RequestVoteArgs{}
 	rf.mu.Lock()
@@ -288,12 +288,12 @@ func (rf *Raft) startAsCand() bool {
 			continue
 		}
 		server := s
-		done.Add(1)
 		reply := RequestVoteReply{}
-		go func() {
-			defer done.Done()
+		go func(server int, args RequestVoteArgs, reply RequestVoteReply) {
 			ok := rf.sendRequestVote(server, &args, &reply)
 			if !ok {
+				getReply++
+				cond.Signal()
 				return
 			}
 			rf.mu.Lock()
@@ -302,29 +302,34 @@ func (rf *Raft) startAsCand() bool {
 				rf.Term = reply.Term
 				rf.becomeFollwerFromCand <- true
 				rf.State = Follwer
+				cond.Signal()
 				rf.mu.Unlock()
 				return
 			}
 			if reply.VoteGranted == true {
 				votes++
 			}
+			cond.Signal()
 			rf.mu.Unlock()
-		}()
+		}(server, args, reply)
 	}
-	done.Wait()
-	if getReply == 1 {
+	rf.mu.Lock()
+	for getReply != len(rf.peers) && votes <= len(rf.peers)/2 {
+		cond.Wait()
+	}
+	rf.mu.Unlock()
+	if getReply == 1 && len(rf.peers) > 2 {
 		rf.mu.Lock()
 		rf.Term--
-		rf.mu.Unlock()
 		rf.becomeFollwerFromCand <- true
+		rf.mu.Unlock()
 		return false
 	}
-	if votes > getReply/2 && votes > 1 {
+	if votes > len(rf.peers)/2 {
 		return true
 	} else {
 		return false
 	}
-	//println(time.Since(a), "  ", time.Duration(generateTime())*time.Millisecond)
 }
 
 func (rf *Raft) setLeader(bo bool) {
