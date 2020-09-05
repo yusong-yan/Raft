@@ -16,6 +16,12 @@ const (
 	Follwer
 )
 
+const (
+	DidNotWin = iota
+	Win
+	Disconnect
+)
+
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -534,7 +540,7 @@ func (rf *Raft) sendHeartBeat() {
 	//println(time.Since(a)*time.Millisecond, "  ", time.Duration(generateTime())*time.Millisecond)
 }
 
-func (rf *Raft) startAsCand(interval int) bool {
+func (rf *Raft) startAsCand(interval int) int {
 	votes := 1
 	cond := sync.NewCond(&rf.mu)
 	var needReturn bool
@@ -599,12 +605,12 @@ func (rf *Raft) startAsCand(interval int) bool {
 		rf.Term--
 		rf.becomeFollwerFromCand <- true
 		rf.mu.Unlock()
-		return false
+		return Disconnect
 	}
 	if votes > len(rf.peers)/2 {
-		return true
+		return Win
 	} else {
-		return false
+		return DidNotWin
 	}
 }
 
@@ -622,8 +628,8 @@ func (rf *Raft) setLeader(bo bool) {
 func (rf *Raft) startElection() {
 	for !rf.killed() {
 		ticker := time.NewTicker(time.Duration(generateTime()) * time.Millisecond)
-		elec := false
-		leader := make(chan bool, 1)
+		elec := true
+		leader := make(chan int, 1)
 	Loop:
 		for !rf.killed() {
 			select {
@@ -638,11 +644,16 @@ func (rf *Raft) startElection() {
 				ticker = time.NewTicker(time.Duration(generateTime()) * time.Millisecond)
 				elec = false
 			case a := <-leader:
-				if a && elec {
+				if a == Disconnect {
+					ticker = time.NewTicker(time.Duration(generateTime()) * 1000 * time.Millisecond)
+				} else if a == Win && elec {
 					break Loop
 				}
 			case <-rf.becomeFollwerFromCand:
 				ticker = time.NewTicker(time.Duration(generateTime()) * time.Millisecond)
+				rf.mu.Lock()
+				rf.State = Follwer
+				rf.mu.Unlock()
 				elec = false
 			default:
 			}
