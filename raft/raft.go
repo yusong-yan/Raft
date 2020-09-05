@@ -140,7 +140,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.StartDoneCond.Signal()
 		return -1, -1, false
 	} else { //start append cmd to log and append to other servers
-		//go func() {
 		finished := 1
 		sucReplicate := 1
 		newCmd := Entry{}
@@ -172,19 +171,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			go func() {
 				success := false
 				for !rf.killed() {
-					//fmt.Println("Send to server", server, "with command", command)
 					reply := AppendEntriesReply{}
-					//role := "Follwer"
-					// //if rf.State == Leader {
-					// 	role = "Leader"
-					// }
-					// fmt.Println(args.PrevLogIndex, " ", rf.log, " ", role)
 					okchan := make(chan bool, 1)
 					go func() {
 						returnBool := rf.sendAppendEntries(server, &args, &reply)
 						okchan <- returnBool
 					}()
-					//a := time.Now()
 					var ok bool
 					ticker := time.NewTicker(10000000)
 					select {
@@ -193,8 +185,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 					case <-okchan:
 						ok = true
 					}
-					//println(time.Since(a), " ", 9000000)
-
 					if !ok {
 						rf.mu.Lock()
 						finished++
@@ -218,7 +208,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 						break
 					} else {
 						if reply.LastIndex != -1 {
-							//fmt.Println(reply.LastIndex, " ", args.PrevLogIndex, " ", args.Entries[0].Command)
 							args.PrevLogIndex = reply.LastIndex
 						} else {
 							args.PrevLogIndex = args.PrevLogIndex - 1
@@ -281,15 +270,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}
 			rf.mu.Unlock()
 			rf.StartDoneCond.Signal()
-			//fmt.Println(time.Since(a), " with command ", command)
 		} else {
 			for i := 0; i < len(rf.peers)-1; i++ {
 				<-completePeer
 			}
 			rf.StartDoneCond.Signal()
-			//fmt.Println(time.Since(a), "NOT ENOUGH REPLICA with command ", command)
 		}
-		//}()
 	}
 	return index, Term, isLeader
 }
@@ -314,22 +300,17 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 		}
 	}
 	if args.PrevLogIndex == -1 {
-		//println("readycommit")
 		if args.LeaderCommit > rf.commitIndex {
-			//println("Commit")
 			rf.commitIndex = min(args.LeaderCommit, rf.GetLastLogEntryWithoutLock().Index)
-			//println("rf ", rf.me, "commite ", rf.commitIndex)
 			rf.committeGetUpdate.Signal()
 			rf.commitGetUpdateDone.Wait()
 			reply.Success = true
 		}
 	} else { //append
 		entr, find := rf.GetLogAtIndexWithoutLock(args.PrevLogIndex)
-		//fmt.Println("THE LAST IS, ", rf.GetLastLogEntryWithoutLock().Index, " ", rf.GetLastLogEntryWithoutLock().Command, " ", rf.GetLastLogEntryWithoutLock().Term)
 		if !find { //give the last index
 			reply.LastIndex = rf.GetLastLogEntryWithoutLock().Index
 			reply.Success = false
-			//println("couldn;t find,", args.PrevLogIndex, " the last index of reply is , ", reply.LastIndex)
 		} else {
 			if entr.Term != args.PrevLogTerm {
 				rf.log = rf.log[:IndexInLog(args.PrevLogIndex)]
@@ -340,8 +321,6 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 				rf.log = append(rf.log, args.Entries...)
 				reply.LastIndex = -1
 				reply.Success = true
-				//println("rf ", rf.me, "with lengthlog ", len(rf.log))
-				//printLog(rf.log)
 			}
 		}
 	}
@@ -458,9 +437,6 @@ func Make(peers []*myrpc.ClientEnd, me int,
 				am.Command = rf.log[IndexInLog(rf.lastApplied)].Command
 				am.CommandIndex = rf.lastApplied
 				am.CommandValid = true
-				// if rf.State != Leader {
-				// 	fmt.Println("rf", rf.me, " apply", am.Command, " last appy ", rf.lastApplied)
-				// }
 				applyCh <- am
 			}
 			rf.mu.Unlock()
