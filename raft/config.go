@@ -282,17 +282,17 @@ func (cfg *config) PrintAllInformation() {
 		if cfg.connected[i] {
 			Term, State := cfg.rafts[i].GetState2()
 			println("Raft", i, " in term", Term, " as ", State)
-			// print("      log: ")
-			// cfg.printLog(cfg.rafts[i])
-			// println()
+			print("      log: ")
+			cfg.printLog(cfg.rafts[i])
+			println()
 
 		}
 	}
 	println("============================")
 }
 
-// func (cfg *config) printLog(raft *Raft) {
-// 	for i := 0; i < len(raft.log); i++ {
-// 		fmt.Print(raft.log[i].Command, " ")
-// 	}
-// }
+func (cfg *config) printLog(raft *Raft) {
+	for i := 0; i < len(raft.log); i++ {
+		fmt.Print(raft.log[i].Command, " ")
+	}
+}
