@@ -151,7 +151,6 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 			rf.becomeFollwerFromLeader <- true
 			rf.State = Follwer
 			rf.Term = args.Term
-			rf.persist()
 		}
 		reply.Success = true
 	} else {
@@ -161,7 +160,6 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 				rf.receiveHB <- true
 				rf.State = Follwer
 				reply.Success = true
-				rf.persist()
 			}
 		}
 	}
@@ -189,9 +187,9 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 				reply.Success = true
 			}
 		}
-		rf.persist()
 	}
 	reply.Term = rf.Term
+	rf.persist()
 	rf.mu.Unlock()
 }
 
@@ -218,7 +216,6 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 			}
 			reply.Term = rf.Term
 			reply.State = rf.State
-			rf.persist()
 		} else {
 			reply.Term = rf.Term
 			reply.State = rf.State
@@ -243,8 +240,8 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 		} else {
 			reply.VoteGranted = false
 		}
-		rf.persist()
 	}
+	rf.persist()
 	rf.mu.Unlock()
 }
 
@@ -260,8 +257,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.isLeader
 	rf.mu.Unlock()
 	if isLeader {
-		// rf.mu.Lock()
-		//<-rf.peerAppendBuffer[rf.me]
 		rf.mu.Lock()
 		index = rf.GetLastLogEntryWithoutLock().Index + 1
 		Term = rf.Term
@@ -299,15 +294,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		for i := 0; i < len(rf.peers)-1; i++ {
 			<-c
 		}
-		// go func() {
-		// 	rf.peerAppendBuffer[rf.me] <- true
-		// }()
 	}
 	return index, Term, isLeader
 }
 
 func (rf *Raft) StarOnePeer(server int, c chan bool, cond *sync.Cond, committe *bool) {
-	//<-rf.peerAppendBuffer[server]
 	rf.StarOnePeerAppend(server)
 	go func() {
 		c <- true
@@ -323,9 +314,6 @@ func (rf *Raft) StarOnePeer(server int, c chan bool, cond *sync.Cond, committe *
 	go func() {
 		c <- true
 	}()
-	// go func() {
-	// 	rf.peerAppendBuffer[server] <- true
-	// }()
 }
 
 func (rf *Raft) StarOnePeerAppend(server int) {
@@ -375,12 +363,18 @@ func (rf *Raft) StarOnePeerAppend(server int) {
 				rf.mu.Unlock()
 				break
 			} else {
+				rf.mu.Lock()
+				args.Term = rf.Term
+				args.PrevLogIndex = rf.matchIndex[server]
+				args.PrevLogTerm = rf.TermForLog(args.PrevLogIndex)
+				args.Entries = entries
+				args.LeaderCommit = rf.commitIndex
 				if reply.LastIndex != -1 {
 					args.PrevLogIndex = reply.LastIndex
 				} else {
 					args.PrevLogIndex = args.PrevLogIndex - 1
 				}
-				rf.mu.Lock()
+				args.LeaderCommit = rf.commitIndex
 				args.PrevLogTerm = rf.TermForLog(args.PrevLogIndex)
 				args.Entries = rf.log[IndexInLog(args.PrevLogIndex+1):]
 				rf.mu.Unlock()
@@ -478,11 +472,15 @@ func Make(peers []*myrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, len(peers))
 	rf.nextIndex = make([]int, len(peers))
 	rf.peerAlive = make([]bool, len(peers))
-	//rf.peerAppendBuffer = make([]chan bool, len(peers))
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.committeGetUpdate = sync.NewCond(&rf.mu)
 	rf.commitGetUpdateDone = sync.NewCond(&rf.mu)
+	for i := 0; i < len(peers); i++ {
+		rf.nextIndex = append(rf.nextIndex, 1)
+		rf.matchIndex = append(rf.matchIndex, 0)
+		rf.peerAlive = append(rf.peerAlive, true)
+	}
 	go rf.startElection()
 	go func() {
 		for !rf.killed() {
@@ -506,6 +504,15 @@ func Make(peers []*myrpc.ClientEnd, me int,
 }
 
 func (rf *Raft) startAsLeader() {
+	rf.mu.Lock()
+	for i := 0; i < len(rf.peers); i++ {
+		s := i
+		rf.nextIndex[s] = rf.GetLastLogEntryWithoutLock().Index + 1
+		rf.matchIndex[s] = 0
+		rf.peerAlive[s] = false
+	}
+	rf.mu.Unlock()
+
 	for !rf.killed() {
 		go rf.sendHeartBeat()
 		rf.mu.Lock()
@@ -554,21 +561,6 @@ func (rf *Raft) sendHeartBeat() {
 				return
 			}
 			rf.mu.Lock()
-			if !rf.peerAlive[server] {
-				rf.peerAlive[server] = true
-				rf.mu.Unlock()
-				go func() {
-					//<-rf.peerAppendBuffer[server]
-					rf.StarOnePeerAppend(server)
-					rf.StartOnePeerCommitte(server)
-					// go func() {
-					// 	rf.peerAppendBuffer[server] <- true
-					// }()
-				}()
-			} else {
-				rf.mu.Unlock()
-			}
-			rf.mu.Lock()
 			numLost--
 			if reply.Term > rf.Term {
 				rf.Term = reply.Term
@@ -578,6 +570,18 @@ func (rf *Raft) sendHeartBeat() {
 				return
 			}
 			rf.mu.Unlock()
+
+			rf.mu.Lock()
+			if !rf.peerAlive[server] {
+				rf.peerAlive[server] = true
+				rf.mu.Unlock()
+				go func() {
+					rf.StarOnePeerAppend(server)
+					rf.StartOnePeerCommitte(server)
+				}()
+			} else {
+				rf.mu.Unlock()
+			}
 			outDate <- false
 		}()
 	}
@@ -673,6 +677,12 @@ func (rf *Raft) startAsCand(interval int) int {
 	}
 	rf.mu.Unlock()
 	//decide
+	// if numOfDisc <= len(rf.peers) {
+	// 	rf.mu.Lock()
+	// 	rf.Term = 0
+	// 	rf.mu.Unlock()
+	// 	return DidNotWin
+	// }
 	if needReturn == true {
 		return DidNotWin
 	}
@@ -720,18 +730,6 @@ func (rf *Raft) startElection() {
 			}
 		}
 		ticker.Stop()
-		rf.mu.Lock()
-		for i := 0; i < len(rf.peers); i++ {
-			s := i
-			rf.nextIndex[s] = rf.GetLastLogEntryWithoutLock().Index + 1
-			rf.nextIndex[s] = 0
-			rf.peerAlive[s] = true
-			// rf.peerAppendBuffer[s] = make(chan bool)
-			// go func() {
-			// 	rf.peerAppendBuffer[s] <- true
-			// }()
-		}
-		rf.mu.Unlock()
 		rf.setLeader(true)
 		go rf.startAsLeader()
 		<-rf.becomeFollwerFromLeader
