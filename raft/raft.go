@@ -8,19 +8,24 @@ import (
 	"sync/atomic"
 	"time"
 
-	"../mygob"
-	"../myrpc"
+	"../labgob"
+	"../labrpc"
 )
 
 const (
-	Leader = iota
+	Leader = iota + 1
 	Cand
 	Follwer
 )
 const (
-	DidNotWin = iota
+	DidNotWin = iota + 1
 	Win
 	Disconnect
+)
+
+const (
+	Commit = iota + 1
+	Append
 )
 
 type ApplyMsg struct {
@@ -36,11 +41,11 @@ type Entry struct {
 }
 
 type Raft struct {
-	mu                      sync.Mutex         // Lock to protect shared access to this peer's State
-	peers                   []*myrpc.ClientEnd // RPC end points of all peers
-	persister               *Persister         // Object to hold this peer's persisted State
-	me                      int                // this peer's index into peers[]
-	dead                    int32              // set by Kill()
+	mu                      sync.Mutex          // Lock to protect shared access to this peer's State
+	peers                   []*labrpc.ClientEnd // RPC end points of all peers
+	persister               *Persister          // Object to hold this peer's persisted State
+	me                      int                 // this peer's index into peers[]
+	dead                    int32               // set by Kill()
 	isLeader                bool
 	State                   int
 	Term                    int
@@ -85,7 +90,7 @@ func (rf *Raft) GetState2() (int, string) {
 
 func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
-	e := mygob.NewEncoder(w)
+	e := labgob.NewEncoder(w)
 	e.Encode(rf.Term)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
@@ -95,7 +100,7 @@ func (rf *Raft) persist() {
 
 func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
-	d := mygob.NewDecoder(r)
+	d := labgob.NewDecoder(r)
 	var CurrentTerm int
 	var VotedFor int
 	var Logs []Entry
@@ -153,13 +158,21 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 			rf.Term = args.Term
 		}
 		reply.Success = true
+		reply.Term = rf.Term
+		rf.persist()
+		rf.mu.Unlock()
+		return
 	} else {
 		if args.Term >= rf.Term {
-			if len(args.Entries) == 0 {
+			if len(args.Entries) == 0 && args.PrevLogIndex == -2 {
 				rf.Term = args.Term
 				rf.receiveHB <- true
 				rf.State = Follwer
 				reply.Success = true
+				reply.Term = rf.Term
+				rf.persist()
+				rf.mu.Unlock()
+				return
 			}
 		}
 	}
@@ -454,7 +467,7 @@ func generateTime() int {
 	return 350 + r.Intn(diff)
 }
 
-func Make(peers []*myrpc.ClientEnd, me int,
+func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
@@ -543,7 +556,7 @@ func (rf *Raft) sendHeartBeat() {
 	args.Term = rf.Term
 	rf.mu.Unlock()
 	args.Entries = []Entry{}
-	args.PrevLogIndex = -1
+	args.PrevLogIndex = -2
 	outDate := make(chan bool, 1)
 	for s := 0; s < len(rf.peers); s++ {
 		if s == rf.me {
@@ -591,16 +604,20 @@ func (rf *Raft) sendHeartBeat() {
 		if a {
 			rf.mu.Lock()
 			if rf.State == Leader {
-				rf.becomeFollwerFromLeader <- true
+				go func() {
+					rf.becomeFollwerFromLeader <- true
+				}()
 			}
 			rf.mu.Unlock()
 			return
 		}
 	}
-	if numLost == len(rf.peers)-1 {
+	if numLost > len(rf.peers)/2 {
 		rf.mu.Lock()
 		if rf.State == Leader {
-			rf.becomeFollwerFromLeader <- true
+			go func() {
+				rf.becomeFollwerFromLeader <- true
+			}()
 		}
 		rf.mu.Unlock()
 	}

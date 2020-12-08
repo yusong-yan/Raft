@@ -289,10 +289,22 @@ func (cfg *config) PrintAllInformation() {
 		}
 	}
 	println("============================")
+	cfg.printLog2()
 }
 
 func (cfg *config) printLog(raft *Raft) {
 	for i := 0; i < len(raft.log); i++ {
 		fmt.Print(raft.log[i].Command, " ")
 	}
+}
+
+func (cfg *config) printLog2() {
+	println("PRINT")
+	for _, v := range cfg.logs {
+		for i := 1; i < len(v)+1; i++ {
+			fmt.Print(v[i], " ")
+		}
+		println()
+	}
+	println()
 }
