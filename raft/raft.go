@@ -214,7 +214,7 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 			rf.Term = args.Term
 			return
 
-		} else {
+		} else if args.Job == CommitAndHeartBeat {
 			//HeartBeat
 			if rf.PeerCommit == true {
 				rf.PeerCommit = false
@@ -284,6 +284,7 @@ type Raft struct {
 	CommitGetUpdate         *sync.Cond
 	CommitGetUpdateDone     *sync.Cond
 	LastApply               int
+	HeartBeatJob            int
 }
 
 func Make(peers []*myrpc.ClientEnd, me int,
@@ -432,9 +433,7 @@ func (rf *Raft) startAsCand(interval int) int {
 	for hearedBack != len(rf.Peers) && votes <= len(rf.Peers)/2 && needReturn == false && rf.State == Cand {
 		cond.Wait()
 	}
-	rf.mu.Unlock()
 	//decide
-	rf.mu.Lock()
 	if votes > len(rf.Peers)/2 && rf.State == Cand && needReturn == false {
 		rf.mu.Unlock()
 		//fmt.Println(rf.Me, "Win")
@@ -474,10 +473,10 @@ func (rf *Raft) sendHeartBeat() {
 		args := AppendEntriesArgs{}
 		args.LeaderId = rf.Me
 		args.Entries = []Entry{}
-		args.Job = CommitAndHeartBeat
 		rf.mu.Lock()
 		args.LeaderCommit = rf.CommitIndex
 		args.Term = rf.Term
+		args.Job = rf.HeartBeatJob
 		rf.mu.Unlock()
 		for s := 0; s < len(rf.Peers); s++ {
 			server := s
@@ -538,6 +537,7 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 		newE.Index = Index
 		newE.Term = rf.Term
 		rf.Log = append(rf.Log, newE)
+		rf.HeartBeatJob = HeartBeat
 		rf.mu.Unlock()
 		for i := 0; i < len(rf.Peers); i++ {
 			server := i
@@ -561,20 +561,20 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 		for hearedBack != len(rf.Peers) && hearedBackSuccess <= len(rf.Peers)/2 && rf.IsLeader {
 			cond.Wait()
 		}
-		rf.mu.Unlock()
 
 		//decide
-		//if hearedBackSuccess <= len(rf.Peers)/2 {
-		rf.mu.Lock()
 		if rf.updateCommitForLeader() && rf.IsLeader {
+			rf.HeartBeatJob = CommitAndHeartBeat
 			rf.CommitGetUpdate.Signal()
 			rf.CommitGetUpdateDone.Wait()
 			rf.mu.Unlock()
 			return Index, Term, IsLeader
 		} else if rf.IsLeader {
+			rf.HeartBeatJob = CommitAndHeartBeat
 			rf.mu.Unlock()
 			return -1, -1, IsLeader
 		} else {
+			rf.HeartBeatJob = CommitAndHeartBeat
 			rf.mu.Unlock()
 			return -1, -1, false
 		}
@@ -605,13 +605,12 @@ func (rf *Raft) StartOnePeerAppend(server int) bool {
 		args.LeaderCommit = rf.CommitIndex
 		args.Job = Append
 		rf.mu.Unlock()
-		var ok bool
 		for rf.getState() == Leader && !rf.killed() {
 			reply := AppendEntriesReply{}
 			rf.mu.Lock()
 			if rf.PeerAlive[server] && rf.IsLeader {
 				rf.mu.Unlock()
-				ok = rf.sendAppendEntries(server, &args, &reply)
+				ok := rf.sendAppendEntries(server, &args, &reply)
 				if !ok {
 					rf.mu.Lock()
 					rf.PeerAlive[server] = false
