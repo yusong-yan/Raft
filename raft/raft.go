@@ -334,6 +334,9 @@ func Make(peers []*myrpc.ClientEnd, me int,
 
 func (rf *Raft) startElection() {
 	for !rf.killed() {
+		rf.mu.Lock()
+		rf.setFollwer()
+		rf.mu.Unlock()
 		ticker := time.NewTicker(time.Duration(generateTime()) * time.Millisecond)
 		electionResult := make(chan int, 1)
 	Loop:
@@ -365,11 +368,6 @@ func (rf *Raft) startElection() {
 
 		go rf.startAsLeader()
 		<-rf.BecomeFollwerFromLeader
-
-		rf.mu.Lock()
-		rf.setFollwer()
-		rf.mu.Unlock()
-
 	}
 }
 
@@ -432,7 +430,7 @@ func (rf *Raft) startAsCand(interval int) int {
 				return
 			}
 
-			if reply.VoteGranted == true {
+			if reply.VoteGranted == true && rf.State == Cand {
 				votes++
 			}
 			rf.mu.Unlock()
@@ -441,7 +439,7 @@ func (rf *Raft) startAsCand(interval int) int {
 	}
 	//wait
 	rf.mu.Lock()
-	for hearedBack != len(rf.Peers) && votes <= len(rf.Peers)/2 && needReturn == false {
+	for hearedBack != len(rf.Peers) && votes <= len(rf.Peers)/2 && needReturn == false && rf.State == Cand {
 		cond.Wait()
 	}
 	rf.mu.Unlock()
@@ -508,6 +506,7 @@ func (rf *Raft) sendHeartBeat() {
 					rf.mu.Lock()
 					hearedBack++
 					rf.PeerAlive[server] = false
+					rf.PeerCommit[server] = false
 					rf.mu.Unlock()
 					return
 				}
@@ -595,29 +594,29 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 		rf.mu.Unlock()
 
 		//decide
-		if rf.getState() != Leader {
-			return -1, -1, false
-		}
 		//if hearedBackSuccess <= len(rf.Peers)/2 {
 		rf.mu.Lock()
-		if rf.updateCommitForLeader() {
+		if rf.updateCommitForLeader() && rf.IsLeader {
 			for s, _ := range rf.Peers {
 				server := s
-				rf.PeerCommit[server] = true
+				if rf.PeerAlive[server] {
+					rf.PeerCommit[server] = true
+				} else {
+					rf.PeerCommit[server] = false
+				}
 			}
 			rf.CommitGetUpdate.Signal()
 			rf.CommitGetUpdateDone.Wait()
 			rf.PeerCommit[rf.Me] = false
 			rf.mu.Unlock()
 			return Index, Term, IsLeader
+		} else if rf.IsLeader {
+			rf.mu.Unlock()
+			return -1, -1, IsLeader
 		} else {
 			rf.mu.Unlock()
-			return Index, Term, IsLeader
+			return -1, -1, false
 		}
-		// } else if rf.getState() == Leader {
-		// 	rf.BecomeFollwerFromLeader <- true
-		// 	return -1, -1, false
-		// }
 	}
 	return -1, -1, false
 }
@@ -649,12 +648,13 @@ func (rf *Raft) StartOnePeerAppend(server int) bool {
 		for rf.getState() == Leader && !rf.killed() {
 			reply := AppendEntriesReply{}
 			rf.mu.Lock()
-			if rf.PeerAlive[server] {
+			if rf.PeerAlive[server] && rf.IsLeader {
 				rf.mu.Unlock()
 				ok = rf.sendAppendEntries(server, &args, &reply)
 				if !ok {
 					rf.mu.Lock()
 					rf.PeerAlive[server] = false
+					rf.PeerCommit[server] = false
 					rf.mu.Unlock()
 					result = false
 					break
