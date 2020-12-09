@@ -293,8 +293,8 @@ func (cfg *config) PrintAllInformation() {
 }
 
 func (cfg *config) printLog(raft *Raft) {
-	for i := 0; i < len(raft.log); i++ {
-		fmt.Print(raft.log[i].Command, " ")
+	for i := 0; i < len(raft.Log); i++ {
+		fmt.Print(raft.Log[i].Command, " ")
 	}
 }
 
