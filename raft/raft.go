@@ -452,11 +452,11 @@ func (rf *Raft) startAsLeader() {
 		server := i
 		rf.NextIndex[server] = rf.getLastLogEntryWithoutLock().Index + 1
 		rf.MatchIndex[server] = rf.NextIndex[server] - 1
-		rf.PeerAlive[server] = false
+		rf.PeerAlive[server] = true
 	}
 	rf.PeerCommit = false
 	rf.mu.Unlock()
-
+	rf.Start(nil)
 	for {
 		go rf.sendHeartBeat()
 		if rf.getState() != Leader {
@@ -530,14 +530,20 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 		hearedBackSuccess := 1
 		cond := sync.NewCond(&rf.mu)
 		rf.mu.Lock()
-		Index = rf.getLastLogEntryWithoutLock().Index + 1
 		Term = rf.Term
 		newE := Entry{}
-		newE.Command = Command
-		newE.Index = Index
-		newE.Term = rf.Term
-		rf.Log = append(rf.Log, newE)
+		if Command != nil {
+			newE.Command = Command
+			newE.Index = rf.getLastLogEntryWithoutLock().Index + 1
+			newE.Term = rf.Term
+			rf.Log = append(rf.Log, newE)
+		} else {
+			if (len(rf.Log)) > 0 {
+				rf.Log[len(rf.Log)-1].Term = rf.Term
+			}
+		}
 		rf.HeartBeatJob = HeartBeat
+		Index = rf.getLastLogEntryWithoutLock().Index
 		rf.mu.Unlock()
 		for i := 0; i < len(rf.Peers); i++ {
 			server := i
@@ -660,7 +666,7 @@ func (rf *Raft) updateCommitForLeader() bool {
 		granted := 1
 
 		for Server, ServerMatchIndex := range rf.MatchIndex {
-			if Server == rf.Me {
+			if Server == rf.Me || !rf.PeerAlive[Server] {
 				continue
 			}
 			if ServerMatchIndex >= beginIndex {
@@ -668,7 +674,7 @@ func (rf *Raft) updateCommitForLeader() bool {
 			}
 		}
 
-		if granted >= len(rf.Peers)/2+1 && (rf.termForLog(beginIndex) == rf.Term) {
+		if granted >= len(rf.Peers)/2+1 {
 			lastCommittedIndex = beginIndex
 		}
 	}
