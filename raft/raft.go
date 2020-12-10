@@ -307,6 +307,7 @@ func Make(peers []*myrpc.ClientEnd, me int,
 	rf.PeerCommit = false
 	rf.CommitIndex = 0
 	rf.LastApply = 0
+	rf.HeartBeatJob = CommitAndHeartBeat
 	for i := 0; i < len(rf.Peers); i++ {
 		server := i
 		rf.NextIndex[server] = rf.getLastLogEntryWithoutLock().Index + 1
@@ -569,6 +570,13 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 		}
 
 		//decide
+		if hearedBackSuccess <= len(rf.Peers)/2 && rf.IsLeader {
+			rf.HeartBeatJob = CommitAndHeartBeat
+			rf.BecomeFollwerFromLeader <- true
+			rf.setFollwer()
+			rf.mu.Unlock()
+			return -1, -1, false
+		}
 		if rf.updateCommitForLeader() && rf.IsLeader {
 			rf.HeartBeatJob = CommitAndHeartBeat
 			rf.CommitGetUpdate.Signal()
