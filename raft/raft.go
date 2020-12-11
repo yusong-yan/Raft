@@ -205,7 +205,13 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 					reply.Success = false
 				} else {
 					rf.Log = rf.Log[:indexInLog(args.PrevLogIndex+1)]
-					rf.Log = append(rf.Log, args.Entries...)
+					if len(args.Entries) == 0 {
+						if (len(rf.Log)) > 0 {
+							rf.Log[len(rf.Log)-1].Term = args.Term
+						}
+					} else {
+						rf.Log = append(rf.Log, args.Entries...)
+					}
 					reply.LastIndex = -1
 					reply.Success = true
 					rf.PeerCommit = true
@@ -321,12 +327,7 @@ func Make(peers []*myrpc.ClientEnd, me int,
 	go rf.startElection()
 	return rf
 
-	// Your initialization code here (2A, 2B, 2C).
-
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
-
-	return rf
+	//rf.readPersist(persister.ReadRaftState())
 }
 
 func (rf *Raft) startElection() {
