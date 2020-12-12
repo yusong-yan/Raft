@@ -7,12 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"../labgob"
-	"../labrpc"
+	"../mygob"
+	"../myrpc"
 )
 
 // import "bytes"
-// import "../labgob"
+// import "../mygob"
 
 const (
 	Leader = iota + 1
@@ -126,7 +126,7 @@ func min(a int, b int) int {
 
 func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
+	e := mygob.NewEncoder(w)
 	e.Encode(rf.Term)
 	e.Encode(rf.VotedFor)
 	e.Encode(rf.Log)
@@ -136,7 +136,7 @@ func (rf *Raft) persist() {
 
 func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
+	d := mygob.NewDecoder(r)
 	var CurrentTerm int
 	var VotedFor int
 	var Logs []Entry
@@ -204,7 +204,6 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 					}
 					reply.LastIndex = -1
 					reply.Success = true
-					rf.PeerCommit = true
 				}
 			}
 			rf.Term = args.Term
@@ -212,13 +211,9 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 			return
 
 		} else if args.Job == CommitAndHeartBeat {
-			//HeartBeat
-			if rf.PeerCommit == true {
-				rf.PeerCommit = false
-				rf.CommitIndex = min(args.LeaderCommit, rf.getLastLogEntryWithoutLock().Index)
-				rf.CommitGetUpdate.Signal()
-				rf.CommitGetUpdateDone.Wait()
-			}
+			rf.CommitIndex = min(args.LeaderCommit, rf.getLastLogEntryWithoutLock().Index)
+			rf.CommitGetUpdate.Signal()
+			rf.CommitGetUpdateDone.Wait()
 			rf.persist()
 			return
 		}
@@ -263,11 +258,11 @@ func (rf *Raft) HandleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 }
 
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	Peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	Me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
+	mu        sync.Mutex         // Lock to protect shared access to this peer's state
+	Peers     []*myrpc.ClientEnd // RPC end points of all peers
+	persister *Persister         // Object to hold this peer's persisted state
+	Me        int                // this peer's index into peers[]
+	dead      int32              // set by Kill()
 	//
 	Log                     []Entry
 	IsLeader                bool
@@ -279,15 +274,15 @@ type Raft struct {
 	NextIndex               map[int]int
 	MatchIndex              map[int]int
 	PeerAlive               map[int]bool
-	PeerCommit              bool
-	CommitIndex             int
-	CommitGetUpdate         *sync.Cond
-	CommitGetUpdateDone     *sync.Cond
-	LastApply               int
-	HeartBeatJob            int
+	//PeerCommit              bool
+	OpenCommit          map[int]bool
+	CommitIndex         int
+	CommitGetUpdate     *sync.Cond
+	CommitGetUpdateDone *sync.Cond
+	LastApply           int
 }
 
-func Make(peers []*labrpc.ClientEnd, me int,
+func Make(peers []*myrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.Peers = peers
@@ -304,10 +299,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.NextIndex = map[int]int{}
 	rf.MatchIndex = map[int]int{}
 	rf.PeerAlive = map[int]bool{}
-	rf.PeerCommit = false
+	//rf.PeerCommit = false
+	rf.OpenCommit = map[int]bool{}
 	rf.CommitIndex = 0
 	rf.LastApply = 0
-	rf.HeartBeatJob = CommitAndHeartBeat
 	for i := 0; i < len(rf.Peers); i++ {
 		server := i
 		rf.NextIndex[server] = rf.getLastLogEntryWithoutLock().Index + 1
@@ -320,7 +315,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.startElection()
 	rf.readPersist(persister.ReadRaftState())
 	return rf
-	//rf.readPersist(persister.ReadRaftState())
 }
 
 func (rf *Raft) startElection() {
@@ -374,7 +368,6 @@ func (rf *Raft) startAsCand(interval int) int {
 	votes := 1
 	args := RequestVoteArgs{}
 	rf.mu.Lock()
-	rf.PeerCommit = false
 	rf.State = Cand
 	rf.Term = rf.Term + 1
 	rf.VotedFor = rf.Me
@@ -444,8 +437,8 @@ func (rf *Raft) startAsLeader() {
 		rf.NextIndex[server] = rf.getLastLogEntryWithoutLock().Index + 1
 		rf.MatchIndex[server] = rf.NextIndex[server] - 1
 		rf.PeerAlive[server] = true
+		rf.OpenCommit[server] = false
 	}
-	rf.PeerCommit = false
 	rf.mu.Unlock()
 	rf.Start(nil)
 	for !rf.killed() {
@@ -461,19 +454,25 @@ func (rf *Raft) sendHeartBeat() {
 	if rf.getState() == Leader {
 		hearedBack := 1
 		hearedBackSuccess := 1
-		args := AppendEntriesArgs{}
-		args.LeaderId = rf.Me
-		args.Entries = []Entry{}
-		rf.mu.Lock()
-		args.LeaderCommit = rf.CommitIndex
-		args.Term = rf.Term
-		args.Job = rf.HeartBeatJob
-		rf.mu.Unlock()
 		for s := 0; s < len(rf.Peers); s++ {
 			server := s
 			if server == rf.Me {
 				continue
 			}
+
+			args := AppendEntriesArgs{}
+			args.LeaderId = rf.Me
+			args.Entries = []Entry{}
+			args.Job = CommitAndHeartBeat
+			rf.mu.Lock()
+			args.LeaderCommit = rf.CommitIndex
+			args.Term = rf.Term
+			args.Job = HeartBeat
+			if rf.OpenCommit[server] {
+				args.Job = CommitAndHeartBeat
+			}
+			rf.mu.Unlock()
+
 			reply := AppendEntriesReply{}
 
 			go func() {
@@ -483,6 +482,7 @@ func (rf *Raft) sendHeartBeat() {
 					rf.mu.Lock()
 					hearedBack++
 					rf.PeerAlive[server] = false
+					rf.OpenCommit[server] = false
 					rf.mu.Unlock()
 					return
 				}
@@ -502,6 +502,12 @@ func (rf *Raft) sendHeartBeat() {
 					rf.PeerAlive[server] = true
 					go func() {
 						rf.StartOnePeerAppend(server)
+						rf.mu.Lock()
+						if rf.updateCommitForLeader() && rf.IsLeader {
+							rf.CommitGetUpdate.Signal()
+							rf.CommitGetUpdateDone.Wait()
+						}
+						rf.mu.Unlock()
 					}()
 				}
 				rf.mu.Unlock()
@@ -532,7 +538,6 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 				rf.Log[len(rf.Log)-1].Term = rf.Term
 			}
 		}
-		rf.HeartBeatJob = HeartBeat
 		Index = rf.getLastLogEntryWithoutLock().Index
 		rf.persist()
 		rf.mu.Unlock()
@@ -561,21 +566,15 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 
 		//decide
 		if hearedBackSuccess <= len(rf.Peers)/2 && rf.IsLeader {
-			rf.HeartBeatJob = CommitAndHeartBeat
-			rf.BecomeFollwerFromLeader <- true
-			rf.setFollwer()
-			rf.persist()
 			rf.mu.Unlock()
 			return -1, -1, false
 		} else {
 			if rf.updateCommitForLeader() && rf.IsLeader {
-				rf.HeartBeatJob = CommitAndHeartBeat
 				rf.CommitGetUpdate.Signal()
 				rf.CommitGetUpdateDone.Wait()
 				rf.mu.Unlock()
 				return Index, Term, IsLeader
 			} else {
-				rf.HeartBeatJob = CommitAndHeartBeat
 				rf.mu.Unlock()
 				return -1, -1, false
 			}
@@ -616,6 +615,7 @@ func (rf *Raft) StartOnePeerAppend(server int) bool {
 				if !ok {
 					rf.mu.Lock()
 					rf.PeerAlive[server] = false
+					rf.OpenCommit[server] = false
 					rf.mu.Unlock()
 					result = false
 					break
@@ -631,6 +631,8 @@ func (rf *Raft) StartOnePeerAppend(server int) bool {
 				rf.mu.Lock()
 				rf.MatchIndex[server] = len(args.Entries) + args.PrevLogIndex
 				rf.NextIndex[server] = rf.MatchIndex[server] + 1
+				rf.OpenCommit[server] = true
+				rf.PeerAlive[server] = true
 				rf.mu.Unlock()
 				result = true
 				break
@@ -674,7 +676,7 @@ func (rf *Raft) updateCommitForLeader() bool {
 			lastCommittedIndex = beginIndex
 		}
 	}
-	if lastCommittedIndex > rf.CommitIndex {
+	if lastCommittedIndex > rf.CommitIndex && rf.IsLeader {
 		rf.CommitIndex = lastCommittedIndex
 		updated = true
 	}
