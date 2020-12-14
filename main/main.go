@@ -36,7 +36,7 @@ func main() {
 			fmt.Println("\nInvalid Server Number (please select between 2 - 12)")
 			continue
 		}
-		cfg := raft.Make_config(numServer, true)
+		cfg := raft.Make_config(numServer, false)
 		for {
 			printMenu()
 			var command string

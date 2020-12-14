@@ -174,7 +174,6 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 		rf.Term = args.Term
 		if rf.IsLeader {
 			rf.BecomeFollwerFromLeader <- true
-
 		} else {
 			rf.ReceiveHB <- true
 		}
@@ -195,27 +194,20 @@ func (rf *Raft) HandleAppendEntries(args *AppendEntriesArgs, reply *AppendEntrie
 					reply.Success = false
 				} else {
 					rf.Log = rf.Log[:indexInLog(args.PrevLogIndex+1)]
-					if len(args.Entries) == 0 {
-						if (len(rf.Log)) > 0 {
-							rf.Log[len(rf.Log)-1].Term = args.Term
-						}
-					} else {
-						rf.Log = append(rf.Log, args.Entries...)
+					rf.Log = append(rf.Log, args.Entries...)
+					if (len(rf.Log)) > 0 {
+						rf.Log[len(rf.Log)-1].Term = args.Term
 					}
 					reply.LastIndex = -1
 					reply.Success = true
 				}
 			}
-			rf.Term = args.Term
-			rf.persist()
-			return
-
 		} else if args.Job == CommitAndHeartBeat {
 			rf.CommitIndex = min(args.LeaderCommit, rf.getLastLogEntryWithoutLock().Index)
-			rf.startApply()
-			rf.persist()
-			return
+			go rf.startApply(rf.CommitIndex)
 		}
+		rf.persist()
+		return
 	}
 	//TERM IS BIGGER JUST REPLY TERM
 	reply.Term = rf.Term
@@ -277,7 +269,8 @@ type Raft struct {
 	CommitIndex             int
 	LastApply               int
 	ApplyChan               chan ApplyMsg
-	peerAppendBuffer        []chan bool
+	ApplyBuffer             chan bool
+	//peerAppendBuffer        []chan bool
 }
 
 func Make(peers []*myrpc.ClientEnd, me int,
@@ -294,7 +287,11 @@ func Make(peers []*myrpc.ClientEnd, me int,
 	rf.Term = 0
 	rf.ReceiveHB = make(chan bool, 1)
 	rf.BecomeFollwerFromLeader = make(chan bool, 1)
-	rf.peerAppendBuffer = make([]chan bool, len(peers))
+	rf.ApplyBuffer = make(chan bool, 1)
+	go func() {
+		rf.ApplyBuffer <- true
+	}()
+	//rf.peerAppendBuffer = make([]chan bool, len(peers))
 	rf.NextIndex = map[int]int{}
 	rf.MatchIndex = map[int]int{}
 	rf.PeerAlive = map[int]bool{}
@@ -306,7 +303,7 @@ func Make(peers []*myrpc.ClientEnd, me int,
 	for i := 0; i < len(rf.Peers); i++ {
 		server := i
 		rf.NextIndex[server] = rf.getLastLogEntryWithoutLock().Index + 1
-		rf.MatchIndex[server] = rf.NextIndex[server] - 1
+		rf.MatchIndex[server] = 0
 		rf.PeerAlive[server] = true
 	}
 	go rf.startElection()
@@ -428,23 +425,26 @@ func (rf *Raft) startAsLeader() {
 	for i := 0; i < len(rf.Peers); i++ {
 		server := i
 		rf.NextIndex[server] = rf.getLastLogEntryWithoutLock().Index + 1
-		rf.MatchIndex[server] = rf.NextIndex[server] - 1
-		rf.PeerAlive[server] = true
+		rf.MatchIndex[server] = 0
+		rf.PeerAlive[server] = false
 		rf.OpenCommit[server] = false
-		rf.peerAppendBuffer[server] = make(chan bool)
-		go func() {
-			rf.peerAppendBuffer[server] <- true
-		}()
+		if (len(rf.Log)) > 0 {
+			rf.Log[len(rf.Log)-1].Term = rf.Term
+		}
+		// rf.peerAppendBuffer[server] = make(chan bool)
+		// go func() {
+		// 	rf.peerAppendBuffer[server] <- true
+		// }()
 	}
 	rf.setLeader()
 	rf.mu.Unlock()
-	rf.Start(nil)
+	//rf.Start(nil)
 	for !rf.killed() {
 		go rf.sendHeartBeat()
 		if rf.getState() != Leader {
 			return
 		}
-		time.Sleep(time.Duration(120) * time.Millisecond)
+		time.Sleep(time.Duration(160) * time.Millisecond)
 	}
 }
 
@@ -500,11 +500,6 @@ func (rf *Raft) sendHeartBeat() {
 					rf.PeerAlive[server] = true
 					go func() {
 						rf.StartOnePeerAppend(server)
-						rf.mu.Lock()
-						if rf.updateCommitForLeader() && rf.IsLeader {
-							rf.startApply()
-						}
-						rf.mu.Unlock()
 					}()
 				}
 				rf.mu.Unlock()
@@ -519,7 +514,7 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 	IsLeader := rf.getState() == Leader
 	//check if ID exist
 	if IsLeader {
-		<-rf.peerAppendBuffer[rf.Me]
+		//<-rf.peerAppendBuffer[rf.Me]
 		hearedBack := 1
 		hearedBackSuccess := 1
 		cond := sync.NewCond(&rf.mu)
@@ -558,30 +553,29 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 
 		//wait
 		rf.mu.Lock()
-		for hearedBack != len(rf.Peers) && hearedBackSuccess <= len(rf.Peers)/2 && rf.IsLeader {
+		for hearedBack != len(rf.Peers) && rf.CommitIndex < Index && rf.IsLeader {
 			cond.Wait()
 		}
 
 		//decide
-		if hearedBackSuccess <= len(rf.Peers)/2 && rf.IsLeader {
+		if rf.CommitIndex < Index && rf.IsLeader {
 			rf.mu.Unlock()
-			go func() {
-				rf.peerAppendBuffer[rf.Me] <- true
-			}()
-			return -1, -1, false
+			// go func() {
+			// 	rf.peerAppendBuffer[rf.Me] <- true
+			// }()
+			return Index, Term, IsLeader
 		} else {
-			if rf.updateCommitForLeader() && rf.IsLeader {
-				rf.startApply()
+			if rf.CommitIndex >= Index && rf.IsLeader {
 				rf.mu.Unlock()
-				go func() {
-					rf.peerAppendBuffer[rf.Me] <- true
-				}()
+				// go func() {
+				// 	rf.peerAppendBuffer[rf.Me] <- true
+				// }()
 				return Index, Term, IsLeader
 			} else {
 				rf.mu.Unlock()
-				go func() {
-					rf.peerAppendBuffer[rf.Me] <- true
-				}()
+				// go func() {
+				// 	rf.peerAppendBuffer[rf.Me] <- true
+				// }()
 				return -1, -1, false
 			}
 		}
@@ -590,7 +584,7 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) StartOnePeerAppend(server int) bool {
-	<-rf.peerAppendBuffer[server]
+	// <-rf.peerAppendBuffer[server]
 	result := false
 	if rf.getState() == Leader {
 		//set up sending log
@@ -640,6 +634,9 @@ func (rf *Raft) StartOnePeerAppend(server int) bool {
 				rf.NextIndex[server] = rf.MatchIndex[server] + 1
 				rf.OpenCommit[server] = true
 				rf.PeerAlive[server] = true
+				if rf.updateCommitForLeader() && rf.IsLeader {
+					go rf.startApply(rf.CommitIndex)
+				}
 				rf.mu.Unlock()
 				result = true
 				break
@@ -661,9 +658,9 @@ func (rf *Raft) StartOnePeerAppend(server int) bool {
 			}
 		}
 	}
-	go func() {
-		rf.peerAppendBuffer[server] <- true
-	}()
+	// go func() {
+	// 	rf.peerAppendBuffer[server] <- true
+	// }()
 	return result
 }
 
@@ -694,8 +691,9 @@ func (rf *Raft) updateCommitForLeader() bool {
 	return updated
 }
 
-func (rf *Raft) startApply() {
-	for rf.CommitIndex > rf.LastApply && !rf.killed() {
+func (rf *Raft) startApply(CommitIndex int) {
+	<-rf.ApplyBuffer
+	for CommitIndex > rf.LastApply && !rf.killed() {
 		rf.LastApply = rf.LastApply + 1
 		am := ApplyMsg{}
 		am.Command = rf.Log[indexInLog(rf.LastApply)].Command
@@ -703,6 +701,9 @@ func (rf *Raft) startApply() {
 		am.CommandValid = true
 		rf.ApplyChan <- am
 	}
+	go func() {
+		rf.ApplyBuffer <- true
+	}()
 }
 
 func (rf *Raft) getState() int {

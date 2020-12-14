@@ -299,7 +299,7 @@ func (cfg *config) printLog(raft *Raft) {
 }
 
 func (cfg *config) printLog2() {
-	println("PRINT")
+	println("State Machine")
 	for _, v := range cfg.logs {
 		for i := 1; i < len(v)+1; i++ {
 			fmt.Print(v[i], " ")
