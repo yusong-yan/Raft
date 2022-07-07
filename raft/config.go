@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"../myrpc"
+	"6.824/labrpc"
 )
 
 func randstring(n int) string {
@@ -30,7 +30,7 @@ func makeSeed() int64 {
 
 type config struct {
 	mu        sync.Mutex
-	net       *myrpc.Network
+	net       *labrpc.Network
 	n         int
 	rafts     []*Raft
 	applyErr  []string // from apply channel readers
@@ -59,7 +59,7 @@ func Make_config(n int, unreliable bool) *config {
 	})
 	runtime.GOMAXPROCS(4)
 	cfg := &config{}
-	cfg.net = myrpc.MakeNetwork()
+	cfg.net = labrpc.MakeNetwork()
 	cfg.n = n
 	cfg.applyErr = make([]string, cfg.n)
 	cfg.rafts = make([]*Raft, cfg.n)
@@ -83,6 +83,10 @@ func Make_config(n int, unreliable bool) *config {
 	}
 
 	return cfg
+}
+
+func (cfg *config) Crash1(i int) {
+	cfg.crash1(i)
 }
 
 func (cfg *config) crash1(i int) {
@@ -110,7 +114,11 @@ func (cfg *config) crash1(i int) {
 		cfg.saved[i].SaveRaftState(raftlog)
 	}
 }
-
+func (cfg *config) Start1(i int) {
+	cfg.logs[i] = map[int]interface{}{}
+	cfg.start1(i)
+	cfg.Connect(i)
+}
 func (cfg *config) start1(i int) {
 	cfg.crash1(i)
 
@@ -118,7 +126,7 @@ func (cfg *config) start1(i int) {
 	for j := 0; j < cfg.n; j++ {
 		cfg.endnames[i][j] = randstring(20)
 	}
-	ends := make([]*myrpc.ClientEnd, cfg.n)
+	ends := make([]*labrpc.ClientEnd, cfg.n)
 	for j := 0; j < cfg.n; j++ {
 		ends[j] = cfg.net.MakeEnd(cfg.endnames[i][j])
 		cfg.net.Connect(cfg.endnames[i][j], j)
@@ -176,8 +184,8 @@ func (cfg *config) start1(i int) {
 	cfg.rafts[i] = rf
 	cfg.mu.Unlock()
 
-	svc := myrpc.MakeService(rf)
-	srv := myrpc.MakeServer()
+	svc := labrpc.MakeService(rf)
+	srv := labrpc.MakeServer()
 	srv.AddService(svc)
 	cfg.net.AddServer(i, srv)
 }
@@ -289,16 +297,16 @@ func (cfg *config) PrintAllInformation() {
 		}
 	}
 	println("============================")
-	cfg.printLog2()
+	cfg.printStateMachine()
 }
 
 func (cfg *config) printLog(raft *Raft) {
-	for i := 0; i < len(raft.Log); i++ {
-		fmt.Print(raft.Log[i].Command, " ")
+	for i := 0; i < len(raft.raftLog.getLogs()); i++ {
+		fmt.Print(raft.raftLog.getLogs()[i].Command, " ")
 	}
 }
 
-func (cfg *config) printLog2() {
+func (cfg *config) printStateMachine() {
 	println("State Machine")
 	for _, v := range cfg.logs {
 		for i := 1; i < len(v)+1; i++ {

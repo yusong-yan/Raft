@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"../raft"
+	"6.824/raft"
 )
 
 func printMenu() {
@@ -13,10 +13,14 @@ func printMenu() {
 	println("c. Disconnect a servers")
 	println("d. Store K/V")
 	println("e. emit a command")
-	println("m. Back to the main menu ")
+	println("f. crash a server")
+	println("g. start a server")
+	println("h. Back to the main menu ")
 	println("q. Quit")
 	print("ENTER: ")
 }
+
+var unreliableNetowrk = true
 
 func main() {
 
@@ -36,7 +40,7 @@ func main() {
 			fmt.Println("\nInvalid Server Number (please select between 2 - 12)")
 			continue
 		}
-		cfg := raft.Make_config(numServer, false)
+		cfg := raft.Make_config(numServer, unreliableNetowrk)
 		for {
 			printMenu()
 			var command string
@@ -80,7 +84,33 @@ func main() {
 					return
 				}
 				cfg.One(sn)
-			} else if command == "m" {
+			} else if command == "f" {
+				print("\nSelect a server that your want crash: ")
+				var sn string
+				fmt.Scanln(&sn)
+				if sn == "q" {
+					return
+				}
+				serverNum, _ := strconv.Atoi(sn)
+				if serverNum < 0 || serverNum > numServer {
+					println("Error, their is no such server")
+					continue
+				}
+				cfg.Crash1(serverNum)
+			} else if command == "g" {
+				print("\nSelect a server that your want Start: ")
+				var sn string
+				fmt.Scanln(&sn)
+				if sn == "q" {
+					return
+				}
+				serverNum, _ := strconv.Atoi(sn)
+				if serverNum < 0 || serverNum > numServer {
+					println("Error, their is no such server")
+					continue
+				}
+				cfg.Start1(serverNum)
+			} else if command == "h" {
 				cfg.Cleanup()
 				break
 			} else if command == "q" {

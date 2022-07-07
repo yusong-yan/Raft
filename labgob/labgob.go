@@ -1,4 +1,11 @@
-package mygob
+package labgob
+
+//
+// trying to send non-capitalized fields over RPC produces a range of
+// misbehavior, including both mysterious incorrect computation and
+// outright crashes. so this wrapper around Go's encoding/gob warns
+// about non-capitalized field names.
+//
 
 import (
 	"encoding/gob"
@@ -14,37 +21,37 @@ var mu sync.Mutex
 var errorCount int // for TestCapital
 var checked map[reflect.Type]bool
 
-type myEncoder struct {
+type LabEncoder struct {
 	gob *gob.Encoder
 }
 
-func NewEncoder(w io.Writer) *myEncoder {
-	enc := &myEncoder{}
+func NewEncoder(w io.Writer) *LabEncoder {
+	enc := &LabEncoder{}
 	enc.gob = gob.NewEncoder(w)
 	return enc
 }
 
-func (enc *myEncoder) Encode(e interface{}) error {
+func (enc *LabEncoder) Encode(e interface{}) error {
 	checkValue(e)
 	return enc.gob.Encode(e)
 }
 
-func (enc *myEncoder) EncodeValue(value reflect.Value) error {
+func (enc *LabEncoder) EncodeValue(value reflect.Value) error {
 	checkValue(value.Interface())
 	return enc.gob.EncodeValue(value)
 }
 
-type myDecoder struct {
+type LabDecoder struct {
 	gob *gob.Decoder
 }
 
-func NewDecoder(r io.Reader) *myDecoder {
-	dec := &myDecoder{}
+func NewDecoder(r io.Reader) *LabDecoder {
+	dec := &LabDecoder{}
 	dec.gob = gob.NewDecoder(r)
 	return dec
 }
 
-func (dec *myDecoder) Decode(e interface{}) error {
+func (dec *LabDecoder) Decode(e interface{}) error {
 	checkValue(e)
 	checkDefault(e)
 	return dec.gob.Decode(e)
@@ -86,7 +93,7 @@ func checkType(t reflect.Type) {
 			rune, _ := utf8.DecodeRuneInString(f.Name)
 			if unicode.IsUpper(rune) == false {
 				// ta da
-				fmt.Printf("mygob error: lower-case field %v of %v in RPC or persist/snapshot will break your Raft\n",
+				fmt.Printf("labgob error: lower-case field %v of %v in RPC or persist/snapshot will break your Raft\n",
 					f.Name, t.Name())
 				mu.Lock()
 				errorCount += 1
@@ -161,7 +168,7 @@ func checkDefault1(value reflect.Value, depth int, name string) {
 				// this warning typically arises if code re-uses the same RPC reply
 				// variable for multiple RPC calls, or if code restores persisted
 				// state into variable that already have non-default values.
-				fmt.Printf("mygob warning: Decoding into a non-default variable/field %v may not work\n",
+				fmt.Printf("labgob warning: Decoding into a non-default variable/field %v may not work\n",
 					what)
 			}
 			errorCount += 1
